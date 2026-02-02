@@ -86,6 +86,9 @@ class APIClient {
       const token = this.getToken();
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+        console.log(`📤 PUT ${endpoint} - Token attached`);
+      } else {
+        console.warn(`⚠️ PUT ${endpoint} - NO TOKEN ATTACHED!`);
       }
 
       const response = await fetch(`${this.baseURL}${endpoint}`, {

@@ -266,17 +266,6 @@
                 }
 
                 showNotification(errorMsg, 'error');
-
-                // Offer test coordinates
-                if (confirm('Would you like to use test coordinates for development?\n\nOK = Use test location\nCancel = Enter manually')) {
-                    // Use default coordinates (Your location)
-                    if (type === 'pickup') {
-                        document.getElementById('pickupLat').value = 30.836427;
-                        document.getElementById('pickupLng').value = 76.960320;
-                        document.getElementById('pickupLocationName').value = '📍 30.836427, 76.960320 (Test Location)';
-                    }
-                    showNotification('✓ Test location set', 'success');
-                }
             }
         }
 
@@ -524,7 +513,7 @@
                     mapInstance.remove();
                 }
 
-                // Default to user's current location or test location
+                // Default to user's current location
                 let initialLat = 30.836427;
                 let initialLng = 76.960320;
 

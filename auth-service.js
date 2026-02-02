@@ -76,6 +76,15 @@ class AuthService {
   // Update user profile
   static async updateProfile(profileData) {
     try {
+      // Debug: Check if token exists
+      const token = apiClient.getToken();
+      console.log('🔐 Token exists:', !!token);
+      if (token) {
+        console.log('🔐 Token preview:', token.substring(0, 20) + '...');
+      } else {
+        console.warn('⚠️ NO TOKEN FOUND! User may not be logged in.');
+      }
+
       const response = await apiClient.put('/auth/profile', profileData);
       if (response.success) {
         localStorage.setItem('user', JSON.stringify(response.user));

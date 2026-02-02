@@ -519,7 +519,7 @@ exports.getTripDetails = async (req, res) => {
         const { tripId } = req.params;
 
         const trip = await Trip.findById(tripId)
-            .populate('driver', 'firstName lastName rating totalRides vehicle vehicleNumber vehicleColor')
+            .populate('driver', 'firstName lastName rating totalRides vehicle vehicleNumber vehicleColor currentLocation')
             .populate('riders.riderId', 'firstName lastName rating totalRides');
 
         if (!trip) {

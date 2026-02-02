@@ -139,7 +139,8 @@ exports.login = async (req, res) => {
 // GET USER PROFILE
 exports.getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).select('-password');
+    console.log('📝 getProfile called, user ID:', req.user.id);
+    const user = await User.findById(req.user.id).select('-password');
 
     if (!user) {
       return res.status(404).json({
@@ -167,6 +168,10 @@ exports.updateProfile = async (req, res) => {
   try {
     const { firstName, lastName, profileImage, vehicle, vehicleNumber, vehicleColor, licenseNumber } = req.body;
 
+    console.log('📝 updateProfile called');
+    console.log('🔐 req.user:', req.user);
+    console.log('📦 Update data:', { firstName, lastName, profileImage, vehicle, vehicleNumber, vehicleColor, licenseNumber });
+
     const updateData = {};
     if (firstName) updateData.firstName = firstName;
     if (lastName) updateData.lastName = lastName;
@@ -178,11 +183,17 @@ exports.updateProfile = async (req, res) => {
 
     updateData.updatedAt = new Date();
 
+    console.log('🔍 Looking for user with ID:', req.user.id);
+
+    const userId = req.user.id;
+
     const user = await User.findByIdAndUpdate(
-      req.user.userId,
+      userId,
       updateData,
       { new: true, runValidators: true }
     ).select('-password');
+
+    console.log('✅ User found:', !!user);
 
     if (!user) {
       return res.status(404).json({
@@ -222,7 +233,7 @@ exports.verifyPhone = async (req, res) => {
     // For now, just mark as verified
 
     const user = await User.findByIdAndUpdate(
-      req.user.userId,
+      req.user.id,
       { phoneVerified: true },
       { new: true }
     ).select('-password');
@@ -257,7 +268,7 @@ exports.verifyID = async (req, res) => {
     // TODO: Implement ID verification with document upload and verification service
 
     const user = await User.findByIdAndUpdate(
-      req.user.userId,
+      req.user.id,
       { idDocument, idVerified: true },
       { new: true }
     ).select('-password');
@@ -290,7 +301,7 @@ exports.updateLocation = async (req, res) => {
     }
 
     const user = await User.findByIdAndUpdate(
-      req.user.userId,
+      req.user.id,
       {
         currentLocation: {
           type: 'Point',
@@ -328,7 +339,7 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.userId).select('+password');
+    const user = await User.findById(req.user.id).select('+password');
 
     // Verify current password
     const isMatch = await user.comparePassword(currentPassword);

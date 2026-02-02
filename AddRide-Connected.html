@@ -423,6 +423,63 @@
                         await loadChatMessages();
                     }
                 });
+
+                // Listen for rider location updates (in case we need to track rider movement too)
+                socket.on('location-updated', (data) => {
+                    console.log('[DEBUG] Location update received:', data);
+                    // This might contain rider location updates or driver location from Socket.io
+                    if (window.currentActiveTrip && data.userId) {
+                        // Store location updates for later use
+                        if (!window.locationUpdates) {
+                            window.locationUpdates = {};
+                        }
+                        window.locationUpdates[data.userId] = {
+                            lat: data.latitude,
+                            lng: data.longitude,
+                            timestamp: data.timestamp
+                        };
+
+                        // If this is the driver's own location (from driver's GPS), update currentActiveTrip
+                        const currentUser = AuthService.getCurrentUser();
+                        if (currentUser && currentUser.id === data.userId && window.currentActiveTrip && window.currentActiveTrip.driver) {
+                            window.currentActiveTrip.driver.currentLocation = {
+                                type: 'Point',
+                                coordinates: [data.longitude, data.latitude]
+                            };
+                            console.log('[LOCATION] Updated currentActiveTrip driver location:', window.currentActiveTrip.driver.currentLocation);
+                        }
+
+                        console.log('[DEBUG] Stored location update for user:', data.userId);
+                    }
+                });
+
+                // Listen for driver location broadcasts from backend (driver can also receive their own location update)
+                socket.on('driver-location-update', (data) => {
+                    console.log('[DEBUG] Driver location update received:', data);
+
+                    // Check if this is our active trip
+                    if (window.currentActiveTrip && data.tripId === window.currentActiveTrip._id) {
+                        // Update our own location in the trip object
+                        // Use lat/lng from the broadcast (not latitude/longitude)
+                        window.currentActiveTrip.driver.currentLocation = {
+                            type: 'Point',
+                            coordinates: [data.lng, data.lat]
+                        };
+                        console.log('[LOCATION] ✅ Updated driver location from driver-location-update event:', window.currentActiveTrip.driver.currentLocation);
+                    }
+
+                    // Also store all driver location updates in window.driverLocations for map updates
+                    if (!window.driverLocations) {
+                        window.driverLocations = {};
+                    }
+                    window.driverLocations[data.tripId] = {
+                        lat: data.lat,
+                        lng: data.lng,
+                        timestamp: data.timestamp,
+                        driverId: data.driverId
+                    };
+                    console.log('[LOCATION] Stored in window.driverLocations[' + data.tripId + ']:', window.driverLocations[data.tripId]);
+                });
             }, 500);
         }
 
@@ -463,18 +520,26 @@
                 const user = AuthService.getCurrentUser();
 
                 // Populate vehicle type buttons
-                if (user.vehicle) {
+                if (user && user.vehicle) {
                     selectVehicleType(user.vehicle.toLowerCase());
                 }
 
                 // Populate vehicle number input
                 const vehicleNumberInput = document.getElementById('vehicleNumberInput');
-                if (user.vehicleNumber) {
+                if (user && user.vehicleNumber) {
                     vehicleNumberInput.value = user.vehicleNumber;
                 }
 
-                // Add event listeners to save changes
-                vehicleNumberInput.addEventListener('change', saveVehicleInfo);
+                // Add event listeners to save changes - but only when user explicitly makes changes
+                const vehicleTypeButtons = document.querySelectorAll('[id^="vehicleType"]');
+                vehicleTypeButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        // Delay the save to ensure value is updated
+                        setTimeout(saveVehicleInfo, 100);
+                    });
+                });
+
+                vehicleNumberInput.addEventListener('blur', saveVehicleInfo);
             } catch (error) {
                 console.error('Error loading user info:', error);
             }
@@ -506,9 +571,6 @@
                 document.getElementById('vehicleTypeBike').classList.remove('border-gray-300', 'text-gray-700', 'bg-white');
                 document.getElementById('vehicleTypeBike').classList.add('border-blue-500', 'text-white', 'bg-blue-600');
             }
-
-            // Save vehicle info
-            saveVehicleInfo();
         }
 
         // Save vehicle information
@@ -517,9 +579,15 @@
                 const vehicle = document.getElementById('vehicleTypeSelect').value;
                 const vehicleNumber = document.getElementById('vehicleNumberInput').value;
 
+                // Only save if at least one field is filled
+                if (!vehicle && !vehicleNumber) {
+                    return; // Silently return if both are empty
+                }
+
+                // If only one is filled, show warning but don't block
                 if (!vehicle || !vehicleNumber) {
-                    showError('Please fill in all vehicle fields');
-                    return;
+                    console.warn('Vehicle info incomplete - some fields are empty');
+                    return; // Don't save incomplete data
                 }
 
                 const response = await AuthService.updateProfile({
@@ -557,6 +625,10 @@
 
                 if (response && response.trip) {
                     const trip = response.trip;
+
+                    // STORE TRIP GLOBALLY FOR USE IN MAP FUNCTIONS
+                    window.currentActiveTrip = trip;
+
                     console.log('[DEBUG] Trip details loaded, status:', trip.status);
 
                     // Check if trip is still active
@@ -775,7 +847,56 @@
         function showRiderMap(riderId, riderLat, riderLng, destLat, destLng, riderName) {
             console.log(`Map Debug - Rider Pickup: Lat=${riderLat}, Lng=${riderLng}`);
             console.log(`Map Debug - Rider Destination: Lat=${destLat}, Lng=${destLng}`);
-            console.log(`Map Debug - Driver Location: Lat=30.836427, Lng=76.960320`);
+            console.log(`[MAP] showRiderMap called - current trip:`, window.currentActiveTrip);
+            console.log(`[MAP] window.driverLocations:`, window.driverLocations);
+
+            // Get driver's actual LIVE location from the stored trip
+            let driverLat = null;
+            let driverLng = null;
+
+            if (window.currentActiveTrip) {
+                const trip = window.currentActiveTrip;
+                console.log(`[MAP] Trip ID: ${trip._id}, Driver object exists: ${!!trip.driver}, Driver.currentLocation:`, trip.driver?.currentLocation);
+
+                // PRIMARY: Get driver's current location from their profile (live GPS location)
+                if (trip.driver && trip.driver.currentLocation && trip.driver.currentLocation.coordinates) {
+                    driverLng = parseFloat(trip.driver.currentLocation.coordinates[0]);
+                    driverLat = parseFloat(trip.driver.currentLocation.coordinates[1]);
+                    console.log(`✅ Map Debug - Driver Live Location from trip.driver.currentLocation: Lat=${driverLat}, Lng=${driverLng}`);
+                }
+                // SECONDARY: Try trip's stored driverLocation if available
+                else if (trip.driverLocation && trip.driverLocation.coordinates) {
+                    if (Array.isArray(trip.driverLocation.coordinates)) {
+                        driverLng = parseFloat(trip.driverLocation.coordinates[0]);
+                        driverLat = parseFloat(trip.driverLocation.coordinates[1]);
+                        console.log(`⚠️ Map Debug - Driver Location from trip.driverLocation: Lat=${driverLat}, Lng=${driverLng}`);
+                    } else if (trip.driverLocation.lng && trip.driverLocation.lat) {
+                        driverLat = parseFloat(trip.driverLocation.lat);
+                        driverLng = parseFloat(trip.driverLocation.lng);
+                        console.log(`⚠️ Map Debug - Driver Location from trip.driverLocation (lat/lng): Lat=${driverLat}, Lng=${driverLng}`);
+                    }
+                }
+                // TERTIARY: Check window.driverLocations for real-time Socket.io updates
+                else if (window.driverLocations && window.driverLocations[trip._id]) {
+                    driverLat = window.driverLocations[trip._id].lat;
+                    driverLng = window.driverLocations[trip._id].lng;
+                    console.log(`⚠️ Map Debug - Driver Location from window.driverLocations (Socket.io): Lat=${driverLat}, Lng=${driverLng}`);
+                }
+                // DO NOT fallback to pickup location - that's the rider's location, not driver's
+            }
+
+            // Validate driver location
+            if (driverLat === null || driverLng === null || isNaN(driverLat) || isNaN(driverLng)) {
+                console.warn(`⚠️ Map Debug - Driver location unavailable or invalid: Lat=${driverLat}, Lng=${driverLng}`);
+                driverLat = null;
+                driverLng = null;
+            }
+
+            // If still no driver location, store a flag to fetch it later
+            const driverLocationUnavailable = (driverLat === null || driverLng === null);
+            if (driverLocationUnavailable) {
+                console.warn(`⚠️ Driver location will be fetched from live tracking if available`);
+            }
 
             // Create map modal if it doesn't exist
             if (!document.getElementById('riderMapModal')) {
@@ -804,19 +925,31 @@
 
             // Initialize map
             setTimeout(() => {
+                // Validate rider coordinates (required)
+                if (!riderLat || !riderLng || isNaN(riderLat) || isNaN(riderLng)) {
+                    showNotification('❌ Error: Rider pickup location unavailable', 'error');
+                    console.error('Invalid rider coordinates:', { riderLat, riderLng });
+                    closeRiderMap();
+                    return;
+                }
+
                 // Remove old map instance if exists
                 if (window.riderMapInstance) {
                     window.riderMapInstance.remove();
                 }
 
-                // Get driver location from active trip
-                const activeTripId = localStorage.getItem('activeTrip');
-                let driverLat = 30.836427;
-                let driverLng = 76.960320;
+                // Calculate center based on available locations
+                // Include driver location if available, otherwise center on rider pickup
+                let centerLat = riderLat;
+                let centerLng = riderLng;
 
-                // Center map between driver and rider pickup location
-                const centerLat = (driverLat + riderLat) / 2;
-                const centerLng = (driverLng + riderLng) / 2;
+                if (driverLat !== null && driverLng !== null && !isNaN(driverLat) && !isNaN(driverLng)) {
+                    centerLat = (driverLat + riderLat) / 2;
+                    centerLng = (driverLng + riderLng) / 2;
+                    console.log(`Map centered between driver and rider: Lat=${centerLat}, Lng=${centerLng}`);
+                } else {
+                    console.warn(`Map centered on rider pickup (driver location invalid): Lat=${centerLat}, Lng=${centerLng}`);
+                }
 
                 window.riderMapInstance = L.map('riderMapContainer').setView([centerLat, centerLng], 13);
 
@@ -825,17 +958,22 @@
                     maxZoom: 19
                 }).addTo(window.riderMapInstance);
 
-                // Add driver marker (green)
-                L.marker([driverLat, driverLng], {
-                    icon: L.icon({
-                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
-                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                        iconSize: [25, 41],
-                        iconAnchor: [12, 41],
-                        popupAnchor: [1, -34],
-                        shadowSize: [41, 41]
-                    })
-                }).addTo(window.riderMapInstance).bindPopup('<div class="font-bold">🚗 Your Location<br/>Driver</div>');
+                // Add driver marker (green) - ONLY if driver location is valid
+                if (driverLat !== null && driverLng !== null && !isNaN(driverLat) && !isNaN(driverLng)) {
+                    L.marker([driverLat, driverLng], {
+                        icon: L.icon({
+                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41],
+                            iconAnchor: [12, 41],
+                            popupAnchor: [1, -34],
+                            shadowSize: [41, 41]
+                        })
+                    }).addTo(window.riderMapInstance).bindPopup('<div class="font-bold">🚗 Driver<br/>Live Location</div>');
+                    console.log(`✅ Driver marker added: Lat=${driverLat}, Lng=${driverLng}`);
+                } else {
+                    console.warn('⚠️ Driver marker NOT added - location unavailable');
+                }
 
                 // Add rider pickup marker (blue) - This is where the rider wants to be picked up
                 L.marker([riderLat, riderLng], {
@@ -863,28 +1001,59 @@
                     }).addTo(window.riderMapInstance).bindPopup(`<div class="font-bold">🏁 ${riderName}<br/>Destination</div>`);
                 }
 
-                // Draw line from driver to pickup location to destination
-                L.polyline(
-                    destLat && destLng
-                        ? [[driverLat, driverLng], [riderLat, riderLng], [destLat, destLng]]
-                        : [[driverLat, driverLng], [riderLat, riderLng]],
-                    { color: 'blue', weight: 2, opacity: 0.7, dashArray: '5, 5' }
-                ).addTo(window.riderMapInstance);
+                // Draw line from driver to pickup location to destination (only if driver location valid)
+                if (driverLat !== null && driverLng !== null && !isNaN(driverLat) && !isNaN(driverLng)) {
+                    L.polyline(
+                        destLat && destLng
+                            ? [[driverLat, driverLng], [riderLat, riderLng], [destLat, destLng]]
+                            : [[driverLat, driverLng], [riderLat, riderLng]],
+                        { color: 'blue', weight: 2, opacity: 0.7, dashArray: '5, 5' }
+                    ).addTo(window.riderMapInstance);
 
-                // Calculate and display distance to pickup
-                const distance = calculateDistance(driverLat, driverLng, riderLat, riderLng);
-                const distanceLabel = document.createElement('div');
-                distanceLabel.className = 'absolute top-4 left-4 bg-white px-4 py-2 rounded-lg shadow-lg z-40 font-bold text-blue-600';
-                distanceLabel.textContent = `🚗→📍 ${distance.toFixed(1)} km`;
-                document.getElementById('riderMapModal').querySelector('.flex-col').appendChild(distanceLabel);
+                    // Calculate and display distance to pickup
+                    const distance = calculateDistance(driverLat, driverLng, riderLat, riderLng);
+                    const distanceLabel = document.createElement('div');
+                    distanceLabel.className = 'absolute top-4 left-4 bg-white px-4 py-2 rounded-lg shadow-lg z-40 font-bold text-blue-600';
+                    distanceLabel.textContent = `🚗→📍 ${distance.toFixed(1)} km`;
+                    document.getElementById('riderMapModal').querySelector('.flex-col').appendChild(distanceLabel);
 
-                // Calculate and display total trip distance if destination exists
-                if (destLat && destLng) {
-                    const tripDistance = calculateDistance(riderLat, riderLng, destLat, destLng);
-                    const tripLabel = document.createElement('div');
-                    tripLabel.className = 'absolute top-16 left-4 bg-white px-4 py-2 rounded-lg shadow-lg z-40 font-bold text-red-600';
-                    tripLabel.textContent = `📍→🏁 ${tripDistance.toFixed(1)} km`;
-                    document.getElementById('riderMapModal').querySelector('.flex-col').appendChild(tripLabel);
+                    // Calculate and display total trip distance if destination exists
+                    if (destLat && destLng) {
+                        const tripDistance = calculateDistance(riderLat, riderLng, destLat, destLng);
+                        const tripLabel = document.createElement('div');
+                        tripLabel.className = 'absolute top-16 left-4 bg-white px-4 py-2 rounded-lg shadow-lg z-40 font-bold text-red-600';
+                        tripLabel.textContent = `📍→🏁 ${tripDistance.toFixed(1)} km`;
+                        document.getElementById('riderMapModal').querySelector('.flex-col').appendChild(tripLabel);
+                    }
+                }
+
+                // Store current driver marker and enable real-time updates (if driver location available)
+                if (driverLat !== null && driverLng !== null && !isNaN(driverLat) && !isNaN(driverLng)) {
+                    window.riderMapDriverMarker = L.marker([driverLat, driverLng], {
+                        icon: L.icon({
+                            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+                            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                            iconSize: [25, 41],
+                            iconAnchor: [12, 41],
+                            popupAnchor: [1, -34],
+                            shadowSize: [41, 41]
+                        })
+                    });
+                    window.riderMapDriverMarker.addTo(window.riderMapInstance);
+
+                    // Set up real-time driver location updates
+                    window.riderMapUpdateInterval = setInterval(() => {
+                        // Get latest trip data - driver location might have been updated via socket
+                        if (window.currentActiveTrip && window.currentActiveTrip.driver && window.currentActiveTrip.driver.currentLocation) {
+                            const newDriverLat = window.currentActiveTrip.driver.currentLocation.coordinates[1];
+                            const newDriverLng = window.currentActiveTrip.driver.currentLocation.coordinates[0];
+
+                            // Update driver marker
+                            if (window.riderMapDriverMarker) {
+                                window.riderMapDriverMarker.setLatLng([newDriverLat, newDriverLng]);
+                            }
+                        }
+                    }, 1000); // Update every 1 second
                 }
             }, 100);
         }
@@ -896,6 +1065,11 @@
                 if (window.riderMapInstance) {
                     window.riderMapInstance.remove();
                     window.riderMapInstance = null;
+                }
+                // Clear update interval
+                if (window.riderMapUpdateInterval) {
+                    clearInterval(window.riderMapUpdateInterval);
+                    window.riderMapUpdateInterval = null;
                 }
             }
         }
@@ -969,21 +1143,6 @@
                 }
 
                 showNotification(errorMsg, 'error');
-
-                // Offer test coordinates
-                if (confirm('Would you like to use test coordinates for development?\n\nOK = Use test location\nCancel = Enter manually')) {
-                    // Use default coordinates (Your location)
-                    if (type === 'pickup') {
-                        document.getElementById('pickupLat').value = 30.836427;
-                        document.getElementById('pickupLng').value = 76.960320;
-                        document.getElementById('pickupLocationName').value = '📍 30.836427, 76.960320 (Test Location)';
-                    } else {
-                        document.getElementById('dropoffLat').value = 30.839747;
-                        document.getElementById('dropoffLng').value = 76.944172;
-                        document.getElementById('dropoffLocationName').value = '📍 30.839747, 76.944172 (Test Location)';
-                    }
-                    showNotification('✓ Test location set', 'success');
-                }
             }
         }
 
@@ -1188,7 +1347,7 @@
                     mapInstance.remove();
                 }
 
-                // Default to user's current location or test location
+                // Default to user's current location
                 let initialLat = 30.836427;
                 let initialLng = 76.960320;
 

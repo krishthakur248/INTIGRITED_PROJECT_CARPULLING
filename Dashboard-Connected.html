@@ -559,15 +559,12 @@
                             resolve();
                         },
                         (error) => {
-                            userLocation = { lat: 30.836427, lng: 76.960320 };
-                            document.getElementById('pickupInput').value = `📍 ${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`;
-                            showNotification('Using default location', 'info');
+                            console.error('Geolocation error:', error);
                             resolve();
                         }
                     );
                 } else {
-                    userLocation = { lat: 30.836427, lng: 76.960320 };
-                    document.getElementById('pickupInput').value = `📍 ${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`;
+                    console.warn('Geolocation not supported');
                     showNotification('Geolocation unavailable', 'warning');
                     resolve();
                 }
@@ -885,7 +882,7 @@
                     <div class="mt-3 space-y-2 text-sm text-[#92adc9]">
                         <div class="flex justify-between">
                             <span>Pickup Distance:</span>
-                            <span class="text-white">${ride.pickupDistance ? (ride.pickupDistance === 0 ? 'Same Location' : ride.pickupDistance + ' km') : 'N/A'}</span>
+                            <span class="text-white">${ride.pickupDistance !== undefined && ride.pickupDistance !== null ? (ride.pickupDistance === 0 ? 'Same Location' : ride.pickupDistance.toFixed(1) + ' km') : 'N/A'}</span>
                         </div>
                         <div class="flex justify-between">
                             <span>Your Fare:</span>
@@ -1240,9 +1237,24 @@
                 return;
             }
 
-            // Get coordinates
-            let driverLat = 30.836427, driverLng = 76.960320;
+            // Get coordinates - START WITH DRIVER'S CURRENT LOCATION
+            let driverLat = null, driverLng = null;
             let pickupLat = null, pickupLng = null, destLat = null, destLng = null;
+
+            // Get driver's current location from trip's currentLocation or from stored locations
+            if (trip.driver && trip.driver.currentLocation && trip.driver.currentLocation.coordinates) {
+                driverLng = trip.driver.currentLocation.coordinates[0];
+                driverLat = trip.driver.currentLocation.coordinates[1];
+            } else if (window.driverLocations && window.driverLocations[tripId]) {
+                driverLat = window.driverLocations[tripId].lat;
+                driverLng = window.driverLocations[tripId].lng;
+            }
+
+            // Fallback to pickup location if driver location not available
+            if (driverLat === null || driverLng === null) {
+                driverLat = trip.pickupLocation?.coordinates?.[1] || 30.836427;
+                driverLng = trip.pickupLocation?.coordinates?.[0] || 76.960320;
+            }
 
             // Extract rider's pickup point (where driver picks up the rider)
             // This comes from the rider's data in the trip
@@ -1437,10 +1449,42 @@
                     document.getElementById('distanceToDriver').textContent = 'Pickup location not set';
                 }
 
-                // Update driver location every 5 seconds (simulated)
-                window.liveTrackingInterval = setInterval(() => {
-                    // In production, this would fetch real driver location from API or WebSocket
-                }, 5000);
+                // Store current trip ID for live tracking
+                window.currentTrackingTripId = tripId;
+
+                // Listen for real-time driver location updates
+                const updateDriverMarker = () => {
+                    if (window.driverLocations && window.driverLocations[tripId]) {
+                        const newLocation = window.driverLocations[tripId];
+
+                        // Update driver marker position
+                        if (window.driverMarker) {
+                            window.driverMarker.setLatLng([newLocation.lat, newLocation.lng]);
+                        }
+
+                        // Update distance
+                        if (pickupLat !== null && pickupLng !== null) {
+                            const distToDriver = calculateDistance(newLocation.lat, newLocation.lng, pickupLat, pickupLng);
+                            const distanceElement = document.getElementById('distanceToDriver');
+                            if (distanceElement) {
+                                distanceElement.textContent = `${distToDriver.toFixed(1)} km away`;
+                            }
+                        }
+
+                        // Pan map to keep driver marker visible
+                        if (window.liveTrackingMap) {
+                            const centerLat = (newLocation.lat + (pickupLat || newLocation.lat)) / 2;
+                            const centerLng = (newLocation.lng + (pickupLng || newLocation.lng)) / 2;
+                            window.liveTrackingMap.panTo([centerLat, centerLng]);
+                        }
+                    }
+                };
+
+                // Check for updates every 2 seconds
+                window.liveTrackingInterval = setInterval(updateDriverMarker, 2000);
+
+                // Store the update function for cleanup
+                window.liveTrackingUpdateFunc = updateDriverMarker;
             }, 100);
         }
 
@@ -1775,6 +1819,15 @@
                     if (rideCard) {
                         rideCard.remove();
                     }
+                } else if (data.type === 'ride-rejected') {
+                    showNotification('❌ ' + data.message, 'error');
+                    // Remove from available rides if showing
+                    const rideCard = document.querySelector(`[data-ride-id="${data.tripId}"]`);
+                    if (rideCard) {
+                        rideCard.remove();
+                    }
+                    // Remove from accepted rides if showing
+                    await loadAcceptedRides();
                 } else if (data.type === 'new-message') {
                     // Show notification for new message
                     showNotification(`📨 New message from ${data.senderName}`, 'info');
