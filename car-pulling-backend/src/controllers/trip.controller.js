@@ -644,7 +644,7 @@ exports.getRiderTrips = async (req, res) => {
         const trips = await Trip.find({
             'riders.riderId': userId
         })
-        .populate('driver', 'firstName lastName rating vehicle vehicleNumber vehicleColor')
+        .populate('driver', 'firstName lastName rating vehicle vehicleNumber vehicleColor currentLocation')
         .populate('riders.riderId', 'firstName lastName phone')
         .sort({ startTime: -1 })
         .limit(20);

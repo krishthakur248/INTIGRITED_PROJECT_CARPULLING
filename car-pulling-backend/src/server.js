@@ -162,9 +162,9 @@ io.on('connection', (socket) => {
       timestamp: new Date(),
     });
 
-    // Also emit driver location specifically for riders searching/viewing this trip
+    // Also emit driver location specifically for riders in this trip only
     // This allows real-time pickup distance calculation on rider side
-    io.emit('driver-location-update', {
+    io.to(`trip_${tripId}`).emit('driver-location-update', {
       tripId: tripId,
       driverId: userId,
       lat: latitude,

@@ -1799,6 +1799,9 @@
                     token: token
                 }
             });
+            
+            // Store socket globally so it can be accessed by other functions (like live tracking)
+            window.riderSocket = socket;
 
             // Join user room for personal notifications (for trip-completed events)
             const user = AuthService.getCurrentUser();
