@@ -850,6 +850,12 @@
             console.log(`[MAP] showRiderMap called - current trip:`, window.currentActiveTrip);
             console.log(`[MAP] window.driverLocations:`, window.driverLocations);
 
+            // JOIN TRIP ROOM TO RECEIVE LOCATION UPDATES (driver needs to be in room to get rider/trip updates)
+            if (window.currentActiveTrip && window.socket && window.socket.connected) {
+                window.socket.emit('join-trip-room', { tripId: window.currentActiveTrip._id });
+                console.log('[SOCKET] Driver joined trip room:', window.currentActiveTrip._id);
+            }
+
             // Get driver's actual LIVE location from the stored trip
             let driverLat = null;
             let driverLng = null;
@@ -1043,15 +1049,20 @@
 
                     // Set up real-time driver location updates
                     window.riderMapUpdateInterval = setInterval(() => {
+                        console.log(`[RIDER-MAP] Update interval - checking driver location:`, window.currentActiveTrip?.driver?.currentLocation);
                         // Get latest trip data - driver location might have been updated via socket
                         if (window.currentActiveTrip && window.currentActiveTrip.driver && window.currentActiveTrip.driver.currentLocation) {
                             const newDriverLat = window.currentActiveTrip.driver.currentLocation.coordinates[1];
                             const newDriverLng = window.currentActiveTrip.driver.currentLocation.coordinates[0];
+                            console.log(`[RIDER-MAP] ✅ Driver location updated: Lat=${newDriverLat}, Lng=${newDriverLng}`);
 
                             // Update driver marker
                             if (window.riderMapDriverMarker) {
                                 window.riderMapDriverMarker.setLatLng([newDriverLat, newDriverLng]);
+                                console.log(`[RIDER-MAP] Driver marker repositioned`);
                             }
+                        } else {
+                            console.log(`[RIDER-MAP] ⏳ Waiting for driver location update...`);
                         }
                     }, 1000); // Update every 1 second
                 }

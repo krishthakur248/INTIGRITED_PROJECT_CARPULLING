@@ -1237,6 +1237,12 @@
                 return;
             }
 
+            // JOIN TRIP ROOM TO RECEIVE LOCATION UPDATES
+            if (window.socket && window.socket.connected) {
+                window.socket.emit('join-trip-room', { tripId: tripId });
+                console.log('[SOCKET] Joined trip room:', tripId);
+            }
+
             // Get coordinates - START WITH DRIVER'S CURRENT LOCATION
             let driverLat = null, driverLng = null;
             let pickupLat = null, pickupLng = null, destLat = null, destLng = null;
@@ -1454,12 +1460,15 @@
 
                 // Listen for real-time driver location updates
                 const updateDriverMarker = () => {
+                    console.log(`[LIVE-TRACKING] Update interval - checking window.driverLocations[${tripId}]:`, window.driverLocations?.[tripId]);
                     if (window.driverLocations && window.driverLocations[tripId]) {
                         const newLocation = window.driverLocations[tripId];
+                        console.log(`[LIVE-TRACKING] ✅ Found location update: Lat=${newLocation.lat}, Lng=${newLocation.lng}`);
 
                         // Update driver marker position
                         if (window.driverMarker) {
                             window.driverMarker.setLatLng([newLocation.lat, newLocation.lng]);
+                            console.log(`[LIVE-TRACKING] Driver marker updated`);
                         }
 
                         // Update distance
@@ -1468,6 +1477,7 @@
                             const distanceElement = document.getElementById('distanceToDriver');
                             if (distanceElement) {
                                 distanceElement.textContent = `${distToDriver.toFixed(1)} km away`;
+                                console.log(`[LIVE-TRACKING] Distance updated: ${distToDriver.toFixed(1)} km`);
                             }
                         }
 
@@ -1477,6 +1487,8 @@
                             const centerLng = (newLocation.lng + (pickupLng || newLocation.lng)) / 2;
                             window.liveTrackingMap.panTo([centerLat, centerLng]);
                         }
+                    } else {
+                        console.log(`[LIVE-TRACKING] ⏳ Waiting for location update...`);
                     }
                 };
 
@@ -1799,7 +1811,7 @@
                     token: token
                 }
             });
-            
+
             // Store socket globally so it can be accessed by other functions (like live tracking)
             window.riderSocket = socket;
 
